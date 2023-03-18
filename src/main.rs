@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 type Int = usize;
-#[derive(PartialEq)]
+#[derive(PartialEq, Clone)]
 enum ITerm {
     Ann(Box<CTerm>, Box<CTerm>),
     Star,
@@ -27,23 +27,105 @@ enum ITerm {
         Box<CTerm>,
     ),
 }
-#[derive(PartialEq)]
+#[derive(PartialEq, Clone)]
 enum CTerm {
     Inf(Box<ITerm>),
     Lam(Box<CTerm>),
 }
 
-#[derive(PartialEq, Eq, Hash)]
+#[derive(PartialEq, Eq, Hash, Clone)]
 enum Name {
     Global(String),
     Local(Int),
     Quote(Int),
 }
 
+#[derive(Clone)]
+struct ClonableClosure0 {
+    f: fn(Value) -> Value,
+}
+
+
+impl ClonableClosure0 {
+    fn new(f: fn(Value) -> Value) -> ClonableClosure0 {
+        ClonableClosure0{ f }
+    }
+    fn apply(&self, v: Value) -> Value {
+        (self.f)(v)
+    }
+}
+
+#[derive(Clone)]
+struct ClonableClosure2 {
+    d: Env,
+    t: CTerm,
+    f: fn(Value, Env, CTerm) -> Value,
+}
+
+impl ClonableClosure2 {
+    fn new(d: Env, t: CTerm, f: fn(Value, Env, CTerm) -> Value) -> ClonableClosure2{
+        ClonableClosure2{d, t, f}
+    }
+    fn apply(&self, v: Value) -> Value {
+        (self.f)(v, self.d, self.t)
+    }
+}
+
+#[derive(Clone)]
+struct ClonableClosureV2 {
+    v1: Value,
+    v2: Value,
+    f: fn(Value, Value, Value) -> Value,
+}
+
+impl ClonableClosureV2 {
+    fn new(v1: Value, v2: Value, f: fn(Value, Value, Value) -> Value) -> ClonableClosureV2{
+        ClonableClosureV2{v1, v2, f}
+    }
+    fn apply(&self, v: Value) -> Value {
+        (self.f)(v, self.v1, self.v2)
+    }
+}
+
+#[derive(Clone)]
+struct ClonableClosureV1 {
+    v: Value,
+    f: fn(Value, Value) -> Value,
+}
+
+impl ClonableClosureV1 {
+    fn new(v: Value, f: fn(Value, Value) -> Value) -> ClonableClosureV1{
+        ClonableClosureV1{v, f}
+    }
+    fn apply(&self, v: Value) -> Value {
+        (self.f)(v, self.v)
+    }
+}
+
+#[derive(Clone)]
+enum ClonableClosure {
+    ClonableClosure0(ClonableClosure0),
+    ClonableClosure2(ClonableClosure2),
+    ClonableClosureV1(ClonableClosureV1),
+    ClonableClosureV2(ClonableClosureV2)
+}
+
+impl ClonableClosure {
+    fn apply(&self, v: Value) -> Value {
+        match self {
+            ClonableClosure::ClonableClosure0(func) => func.apply(v),
+            ClonableClosure::ClonableClosure2(func) => func.apply(v),
+            ClonableClosure::ClonableClosureV1(func) => func.apply(v),
+            ClonableClosure::ClonableClosureV2(func) => func.apply(v)
+        }
+    }
+}
+
+#[derive(Clone)]
 enum Value {
-    VLam(Box<dyn Fn(Value) -> Value>),
+    VLam(Box<ClonableClosure>),
     VStar,
-    VPi(Box<Value>, Box<dyn Fn(Value) -> Value>),
+    VPi(Box<Value>, Box<ClonableClosure>),
     VNeutral(Box<Neutral>),
     VNat,
     VZero,
@@ -55,6 +137,7 @@ enum Value {
 
 type Type = Value;
 
+#[derive(Clone)]
 enum Neutral {
     NFree(Name),
     NApp(Box<Neutral>, Value),
@@ -72,10 +155,10 @@ fn ieval(term: ITerm, d: Env) -> Value {
     match term {
         ITerm::Ann(box cterm, _) => ceval(cterm, d),
         ITerm::Star => Value::VStar,
-        ITerm::Pi(box t1, box t2) => Value::VPi(box ceval(t1, d), box |x| {
+        ITerm::Pi(box t1, box t2) => Value::VPi(box ceval(t1, d), box ClonableClosure::ClonableClosure2(ClonableClosure2::new(d, t2, |x: Value, d: Env, t: CTerm|{
             d.push(x);
-            ceval(t2, d)
-        }),
+            ceval(t, d)
+        }))),
         ITerm::Free(x) => vfree(x),
         ITerm::Bound(i) => d[i],
         ITerm::At(box e1, box e2) => vapp(ieval(e1, d), ceval(e2, d)),
@@ -131,7 +214,7 @@ fn ieval(term: ITerm, d: Env) -> Value {
 
 fn vapp(v1: Value, v2: Value) -> Value {
     match v1 {
-        Value::VLam(f) => f(v2),
+        Value::VLam(box f) => f.apply(v2),
         Value::VNeutral(n) => Value::VNeutral(box Neutral::NApp(n, v2)),
         _ => panic!("Error"),
     }
@@ -145,7 +228,13 @@ fn ceval(term: CTerm, d: Env) -> Value {
                 d.push(v);
                 d
             };
-            Value::VLam(box |x| ceval(e, push(x)))
+            //Value::VLam(box move |x| ceval(e, push(x)))
+            Value::VLam(box ClonableClosure::ClonableClosure2(ClonableClosure2::new(
+                d, e, |v, d, t| {
+                    d.push(v);
+                    ceval(t, d)
+                }
+            )))
         }
     }
 }
@@ -208,9 +297,9 @@ fn itype(i: Int, context: Context, term: ITerm) -> StrResult<Type> {
         ITerm::At(box e1, box e2) => {
             let sigma = itype(i, context, e1)?;
             match sigma {
-                Value::VPi(box t1, t2) => {
+                Value::VPi(box t1, box t2) => {
                     ctype(i, context, e2, t1)?;
-                    Ok(t2(ceval(e2, vec![])))
+                    Ok(t2.apply(ceval(e2, vec![])))
                 }
                 _ => Err("illegal application".to_string()),
             }
@@ -226,7 +315,9 @@ fn itype(i: Int, context: Context, term: ITerm) -> StrResult<Type> {
                 i,
                 context,
                 m,
-                Value::VPi(box Value::VNat, box |v| Value::VStar),
+                Value::VPi(box Value::VNat, box ClonableClosure::ClonableClosure0(ClonableClosure0::new(
+                    |_|Value::VStar
+                ))),
             )?;
             let m_val = ceval(m, vec![]);
             ctype(i, context, mz, vapp(m_val, Value::VZero))?;
@@ -234,10 +325,18 @@ fn itype(i: Int, context: Context, term: ITerm) -> StrResult<Type> {
                 i,
                 context,
                 ms,
-                Value::VPi(box Value::VNat, box |l| {
-                    Value::VPi(box vapp(m_val, l), box |_| vapp(m_val, Value::VSucc(box l)))
-                }),
-            )?;
+                Value::VPi(box Value::VNat, box ClonableClosure::ClonableClosureV1(ClonableClosureV1::new(
+                    m_val,
+                    |l, v| {
+                        Value::VPi(
+                        box vapp(v, l),
+                        //box |_| vapp(m_val, Value::VSucc(box l))
+                        box ClonableClosure::ClonableClosureV2(ClonableClosureV2::new(v, l, |_, v1, v2| {
+                            vapp(v1, Value::VSucc(box v2))
+                        }))
+                    )
+                    }
+                ))))?;
             ctype(i, context, k, Value::VNat)?;
             let k_val = ceval(k, vec![]);
             Ok(vapp(m_val, k_val))
@@ -324,13 +423,13 @@ fn ctype(i: Int, context: Context, term: CTerm, v1: Type) -> StrResult<()> {
             }
         }
         CTerm::Lam(box e) => match v1 {
-            Value::VPi(box t1, t2) => {
+            Value::VPi(box t1, box t2) => {
                 context.insert(Name::Local(i), t1);
                 ctype(
                     i + 1,
                     context,
                     csubst(0, ITerm::Free(Name::Local(i)), e),
-                    t2(vfree(Name::Local(i))),
+                    t2.apply(vfree(Name::Local(i))),
                 )
             }
             _ => Err("type mismatch".to_string()),
@@ -369,11 +468,11 @@ fn quote0(v: Value) -> CTerm {
 
 fn quote(i: Int, v: Value) -> CTerm {
     match v {
-        Value::VLam(f) => CTerm::Lam(box quote(i + 1, f(vfree(Name::Quote(i))))),
+        Value::VLam(box f) => CTerm::Lam(box quote(i + 1, f.apply(vfree(Name::Quote(i))))),
         Value::VStar => CTerm::Inf(box ITerm::Star),
-        Value::VPi(box v, f) => CTerm::Inf(box ITerm::Pi(
+        Value::VPi(box v, box f) => CTerm::Inf(box ITerm::Pi(
             box quote(i, v),
-            box quote(i + 1, f(vfree(Name::Quote(i)))),
+            box quote(i + 1, f.apply(vfree(Name::Quote(i)))),
         )),
         Value::VNeutral(box n) => CTerm::Inf(box neutral_quote(i, n)),
     }
