@@ -264,7 +264,7 @@ fn ieval(term: ITerm, d: Env) -> Value {
             )),
         ),
         ITerm::Free(x) => vfree(x),
-        ITerm::Bound(i) => d[i],
+        ITerm::Bound(i) => d[i].clone(),
         ITerm::At(box e1, box e2) => vapp(ieval(e1, d.clone()), ceval(e2, d)),
         ITerm::Nat => Value::VNat,
         ITerm::Zero => Value::VZero,
@@ -283,6 +283,14 @@ fn ieval(term: ITerm, d: Env) -> Value {
                 _ => panic!("Internal Error"),
             }
         }
+        ITerm::Vec(box a, box n) => Value::VVec(box ceval(a, d.clone()), box ceval(n, d)),
+        ITerm::Nil(box a) => Value::VNil(box ceval(a, d)),
+        ITerm::Cons(box a, box n, box x, box xs) => Value::VCons(
+            box ceval(a, d.clone()),
+            box ceval(n, d.clone()),
+            box ceval(x, d.clone()),
+            box ceval(xs, d),
+        ),
         ITerm::VecElim(box a, box m, box mn, box mc, box k, box xs) => {
             fn rec(
                 k_val: Value,
@@ -569,6 +577,7 @@ fn itype(i: Int, mut context: Context, term: ITerm) -> StrResult<Type> {
                 .iter()
                 .fold(m_val, |v1, v2| vapp(v1, v2.clone())))
         }
+        ITerm::Bound(_) => Err("No type matching".to_string()),
     }
 }
 
@@ -617,6 +626,28 @@ fn isubst(i: Int, r: ITerm, term: ITerm) -> ITerm {
         ITerm::Nat => ITerm::Nat,
         ITerm::Zero => ITerm::Zero,
         ITerm::Succ(box n) => ITerm::Succ(box csubst(i, r, n)),
+        ITerm::NatElim(box m, box mz, box ms, box n) => ITerm::NatElim(
+            box csubst(i, r.clone(), m),
+            box csubst(i, r.clone(), mz),
+            box csubst(i, r.clone(), ms),
+            box csubst(i, r, n),
+        ),
+        ITerm::Vec(box a, box n) => ITerm::Vec(box csubst(i, r.clone(), a), box csubst(i, r, n)),
+        ITerm::Nil(box a) => ITerm::Nil(box csubst(i, r, a)),
+        ITerm::Cons(box a, box n, box x, box xs) => ITerm::Cons(
+            box csubst(i, r.clone(), a),
+            box csubst(i, r.clone(), n),
+            box csubst(i, r.clone(), x),
+            box csubst(i, r, xs),
+        ),
+        ITerm::VecElim(box a, box m, box mn, box mc, box n, box xs) => ITerm::VecElim(
+            box csubst(i, r.clone(), a),
+            box csubst(i, r.clone(), m),
+            box csubst(i, r.clone(), mn),
+            box csubst(i, r.clone(), mc),
+            box csubst(i, r.clone(), n),
+            box csubst(i, r, xs),
+        ),
     }
 }
 
